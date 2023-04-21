@@ -47,7 +47,7 @@ public class TLAplusParser implements tla2sany.st.SyntaxTreeConstants, ParseTree
 
   private UniqueString At = UniqueString.uniqueStringOf("@");
 
-  ParseErrors PErrors = new ParseErrors();
+  public ParseErrors PErrors = new ParseErrors();
 
   private tla2sany.parser.OperatorStack OperatorStack = new tla2sany.parser.OperatorStack( PErrors );
 
