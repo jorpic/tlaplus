@@ -14,6 +14,7 @@ public class REPLTest {
     public void testProcessInput() throws IOException {
         Path tempDir = Files.createTempDirectory("repltest");
         final REPL repl = new REPL(tempDir);
+        repl.moduleExtends += "Reals,Sequences,Bags,FiniteSets,TLC,Randomization";
         String res;
 
         // Numeric expressions.

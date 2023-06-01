@@ -45,6 +45,9 @@ public class REPL {
     // The spec file to use in the REPL context, if any.
     private File specFile = null;
 
+    // The modules we will extend in the REPL environment.
+    public String moduleExtends = "";
+
     // The naming prefix of the temporary directory.
     static final String TEMP_DIR_PREFIX = "tlarepl";
 
@@ -73,58 +76,17 @@ public class REPL {
      */
     public String processInput(String evalExpr) {
 
-        // The modules we will extend in the REPL environment.
-        String moduleExtends = "Reals,Sequences,Bags,FiniteSets,TLC,Randomization";
         try {
-			// Try loading the "index" class of the Community Modules that define
-			// popular modulesl that should be loaded by default. If the Community Modules
-			// are not present, silently fail.
-        	final Class<?> clazz = Class.forName("tlc2.overrides.CommunityModules");
-        	final Method m = clazz.getDeclaredMethod("popularModules");
-        	moduleExtends += String.format(",%s", m.invoke(null));
-		} catch (Exception | NoClassDefFoundError ignore) {
-		}
-        
-        if (specFile != null) {
-            String mainModuleName = specFile.getName().replaceFirst(TLAConstants.Files.TLA_EXTENSION + "$", "");
-            moduleExtends += ("," + mainModuleName);
-        }
-
-        File tempFile, configFile;
-        try {
+            String replValueVarName = "replvalue";
+            String specExpr = replValueVarName + " == " + evalExpr;
 
             // We want to place the spec files used by REPL evaluation into the temporary directory.
-            tempFile = new File(replTempDir.toString(), REPL_SPEC_NAME + TLAConstants.Files.TLA_EXTENSION);
-            configFile = new File(replTempDir.toString(), REPL_SPEC_NAME + TLAConstants.Files.CONFIG_EXTENSION);
-
-            // Create the config file.
-            BufferedWriter cfgWriter = new BufferedWriter(new FileWriter(configFile.getAbsolutePath(), false));
-            cfgWriter.append("INIT replinit");
-            cfgWriter.newLine();
-            cfgWriter.append("NEXT replnext");
-            cfgWriter.newLine();
-            cfgWriter.close();
-
-            // Create the spec file lines.
-            ArrayList<String> lines = new ArrayList<String>();
-            String replValueVarName = "replvalue";
-            lines.add("---- MODULE tlarepl ----");
-            lines.add("EXTENDS " + moduleExtends);
-            lines.add("VARIABLE replvar");
-            // Dummy Init and Next predicates.
-            lines.add("replinit == replvar = 0");
-            lines.add("replnext == replvar' = 0");
-            // The expression to evaluate.
-            lines.add(replValueVarName + " == " + evalExpr);
-            lines.add("====");
-
-            // Write out the spec file.
-            BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile.getAbsolutePath(), false));
-            for (String line : lines) {
-                writer.append(line);
-                writer.newLine();
-            }
-            writer.close();
+            String dir = replTempDir.toString();
+            writeConfig(new File(dir, REPL_SPEC_NAME + TLAConstants.Files.CONFIG_EXTENSION));
+            writeSpec(
+                specExpr,
+                new File(dir, REPL_SPEC_NAME + TLAConstants.Files.TLA_EXTENSION)
+            );
 
             // Avoid sending log messages to stdout and reset the messages recording.
             ToolIO.setMode(ToolIO.TOOL);
@@ -180,6 +142,40 @@ public class REPL {
         return "";
     }
 
+    private void writeConfig(File configFile) throws IOException {
+        // Create the config file.
+        BufferedWriter cfgWriter = new BufferedWriter(new FileWriter(configFile.getAbsolutePath(), false));
+        cfgWriter.append("INIT replinit");
+        cfgWriter.newLine();
+        cfgWriter.append("NEXT replnext");
+        cfgWriter.newLine();
+        cfgWriter.close();
+    }
+
+    private void writeSpec(String evalExpr, File specFile) throws IOException {
+        // Create the spec file lines.
+        ArrayList<String> lines = new ArrayList<String>();
+        lines.add("---- MODULE tlarepl ----");
+        if (!moduleExtends.isEmpty()) {
+            lines.add("EXTENDS " + moduleExtends);
+        }
+        lines.add("VARIABLE replvar");
+        // Dummy Init and Next predicates.
+        lines.add("replinit == replvar = 0");
+        lines.add("replnext == replvar' = 0");
+        // The expression to evaluate.
+        lines.add(evalExpr);
+        lines.add("====");
+
+        // Write out the spec file.
+        BufferedWriter writer = new BufferedWriter(new FileWriter(specFile.getAbsolutePath(), false));
+        for (String line : lines) {
+            writer.append(line);
+            writer.newLine();
+        }
+        writer.close();
+    }
+
     /**
      * Runs the main REPL loop continuously until there is a fatal error or a user interrupt.
      */
@@ -206,10 +202,34 @@ public class REPL {
         }
     }
 
+    static String getCommunityModules() {
+        try {
+            // Try loading the "index" class of the Community Modules that define
+            // popular modules that should be loaded by default. If the Community Modules
+            // are not present, silently fail.
+            final Class<?> clazz = Class.forName("tlc2.overrides.CommunityModules");
+            final Method m = clazz.getDeclaredMethod("popularModules");
+            return (String) m.invoke(null);
+        } catch (Exception | NoClassDefFoundError ignore) {
+            return null;
+        }
+    }
+
+    static String getSpecName(File specFile) {
+        return specFile.getName().replaceFirst(TLAConstants.Files.TLA_EXTENSION + "$", "");
+    }
+
     public static void main(String[] args) {
         try {
             final Path tempDir = Files.createTempDirectory(TEMP_DIR_PREFIX);
             final REPL repl = new REPL(tempDir);
+
+            // The modules we will extend in the REPL environment.
+            repl.moduleExtends += "Reals,Sequences,Bags,FiniteSets,TLC,Randomization";
+            String communityModules = getCommunityModules();
+            if (communityModules != null) {
+                repl.moduleExtends += communityModules;
+            }
             // TODO: Allow external spec file to be loaded into REPL context.
  
             if(args.length == 1) {
