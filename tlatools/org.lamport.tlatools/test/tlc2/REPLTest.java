@@ -9,6 +9,7 @@ import tlc2.repl.REPLException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 public class REPLTest {
 
@@ -16,7 +17,11 @@ public class REPLTest {
     public void testProcessInput() throws IOException, REPLException {
         Path tempDir = Files.createTempDirectory("repltest");
         final REPL repl = new REPL(tempDir);
-        repl.moduleExtends += "Reals,Sequences,Bags,FiniteSets,TLC,Randomization";
+        repl.replState.addModules(
+            Arrays.asList("Reals", "Sequences", "Bags", "FiniteSets", "TLC", "Randomization")
+        );
+        repl.replState.commit();
+
         String res;
 
         // Numeric expressions.
@@ -50,7 +55,10 @@ public class REPLTest {
     public void testInvalidExpressions() throws IOException {
         Path tempDir = Files.createTempDirectory("repltest");
         final REPL repl = new REPL(tempDir);
-        repl.moduleExtends += "Reals,Sequences,Bags,FiniteSets,TLC,Randomization";
+        repl.replState.addModules(
+            Arrays.asList("Reals", "Sequences", "Bags", "FiniteSets", "TLC", "Randomization")
+        );
+        repl.replState.commit();
 
         try {
             repl.processInput("invalid");
@@ -100,5 +108,39 @@ public class REPLTest {
         } catch (REPLException e) {
             assertEquals("Attempted to compute the value of an expression of form CHOOSE x \\in S: P, but S was not enumerable.", e.getMessage());
         }
+    }
+
+    @Test
+    public void testModuleExtends() throws IOException, REPLException {
+        Path tempDir = Files.createTempDirectory("repltest");
+        final REPL repl = new REPL(tempDir);
+
+        // REPL has no extended by default, so Append is not defined.
+        try {
+            repl.processInput("Append(<<1,2>>, 3)");
+            Assert.fail();
+        } catch (REPLException e) {
+            assertEquals("Unknown operator: `Append'.", e.getMessage());
+        }
+
+        // Add Sequences module and it works as expected.
+        repl.processInput("EXTENDS Sequences");
+        String res = repl.processInput("Append(<<1,2>>, 3)");
+        assertEquals("<<1, 2, 3>>", res);
+
+        // Adding nonexistent module fails with a helpful error message.
+        try {
+            repl.processInput("EXTENDS Integers, Unknown");
+            Assert.fail();
+        } catch (REPLException e) {
+            assertEquals(
+                "Cannot find source file for module Unknown imported in module tlarepl.",
+                e.getMessage());
+        }
+
+        // Both Integers and Sequences are exported now, so this succeeds.
+        repl.processInput("EXTENDS Integers");
+        res = repl.processInput("Append(<<1,2>>, 1+2)");
+        assertEquals("<<1, 2, 3>>", res);
     }
 }
