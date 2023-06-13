@@ -346,4 +346,14 @@ class ToolPrintStream extends PrintStream
             ToolPrintStream.class.notifyAll();
         } // synchronized
     } // print
+
+    /**
+     * Prints an object to the ToolIO message buffer.
+     *
+     * @param object The <code>Object</code> to be printed
+     */
+    public synchronized void print(Object object)
+    {
+        print(object.toString());
+    }
 } // class ToolPrintStream
