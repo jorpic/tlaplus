@@ -10,7 +10,6 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
@@ -28,6 +27,7 @@ import tlc2.output.MP;
 import tlc2.tool.EvalException;
 import tlc2.tool.impl.FastTool;
 import tlc2.tool.impl.Tool;
+import tlc2.repl.REPLException;
 import tlc2.value.impl.Value;
 import util.Assert;
 import util.SimpleFilenameToStream;
@@ -74,72 +74,44 @@ public class REPL {
      *
      * @return the pretty printed result of the evaluation or an empty string if there was an error.
      */
-    public String processInput(String evalExpr) {
+    public String processInput(String evalExpr) throws REPLException, IOException {
+        String replValueVarName = "replvalue";
+        String specExpr = replValueVarName + " == " + evalExpr;
+
+        // We want to place the spec files used by REPL evaluation into the temporary directory.
+        String dir = replTempDir.toString();
+        writeConfig(new File(dir, REPL_SPEC_NAME + TLAConstants.Files.CONFIG_EXTENSION));
+        writeSpec(
+            specExpr,
+            new File(dir, REPL_SPEC_NAME + TLAConstants.Files.TLA_EXTENSION)
+        );
+
+        // Avoid sending log messages to stdout and reset the messages recording.
+        ToolIO.setMode(ToolIO.TOOL);
+        ToolIO.reset();
 
         try {
-            String replValueVarName = "replvalue";
-            String specExpr = replValueVarName + " == " + evalExpr;
-
-            // We want to place the spec files used by REPL evaluation into the temporary directory.
-            String dir = replTempDir.toString();
-            writeConfig(new File(dir, REPL_SPEC_NAME + TLAConstants.Files.CONFIG_EXTENSION));
-            writeSpec(
-                specExpr,
-                new File(dir, REPL_SPEC_NAME + TLAConstants.Files.TLA_EXTENSION)
-            );
-
-            // Avoid sending log messages to stdout and reset the messages recording.
-            ToolIO.setMode(ToolIO.TOOL);
-            ToolIO.reset();
-
-            try {
-                // We placed the REPL spec files into a temporary directory, so, we add this temp directory
-                // path to the filename resolver used by the Tool.
-                SimpleFilenameToStream resolver = new SimpleFilenameToStream(replTempDir.toAbsolutePath().toString());
-                Tool tool = new FastTool(REPL_SPEC_NAME, REPL_SPEC_NAME, resolver);
-                ModuleNode module = tool.getSpecProcessor().getRootModule();
-                OpDefNode valueNode = module.getOpDef(replValueVarName);
-                
-				// Make output of TLC!Print and TLC!PrintT appear in the REPL. Set here
-				// and unset in finally below to suppress output of FastTool instantiation
-				// above.
-				tlc2.module.TLC.OUTPUT = replWriter;
-				final Value exprVal = (Value) tool.eval(valueNode.getBody());
-				return exprVal.toString();
-            } catch (EvalException exc) {
-                // TODO: Improve error messages with more specific detail.
-            	System.out.printf("Error evaluating expression: '%s'%n%s%n", evalExpr, exc);
-            } catch (Assert.TLCRuntimeException exc) {
-            	if (exc.parameters != null && exc.parameters.length > 0) {
-					// 0..1 \X 0..1 has non-null params of length zero. Actual error message is
-					// "Parsing or semantic analysis failed.".
-					System.out.printf("Error evaluating expression: '%s'%n%s%n", evalExpr,
-							Arrays.toString(exc.parameters));
-            	} else if (exc.getMessage() != null) {
-            		// Examples of what ends up here:
-            		// 23 = TRUE
-            		// Attempted to evaluate an expression of form P \/ Q when P was an integer.
-            		// 23 \/ TRUE
-            		// Attempted to check equality of integer 23 with non-integer: TRUE
-            		// CHOOSE x \in Nat : x = 4
-            		// Attempted to compute the value of an expression of form CHOOSE x \in S: P, but S was not enumerable.
-					String msg = exc.getMessage().trim();
-					// Strip meaningless location from error message.
-					msg = msg.replaceFirst("\\nline [0-9]+, col [0-9]+ to line [0-9]+, col [0-9]+ of module tlarepl$", "");
-					// Replace any newlines with whitespaces.
-					msg = msg.replaceAll("\\n", " ").trim();
-					System.out.printf("Error evaluating expression: '%s'%n%s%n", evalExpr, msg);
-            	} else {
-            		System.out.printf("Error evaluating expression: '%s'%n", evalExpr);
-            	}
-            } finally {
-                replWriter.flush();
-        		tlc2.module.TLC.OUTPUT = null;
-            }
-        } catch (IOException pe) {
-            pe.printStackTrace();
+            // We placed the REPL spec files into a temporary directory, so, we add this temp directory
+            // path to the filename resolver used by the Tool.
+            SimpleFilenameToStream resolver = new SimpleFilenameToStream(replTempDir.toAbsolutePath().toString());
+            Tool tool = new FastTool(REPL_SPEC_NAME, REPL_SPEC_NAME, resolver);
+            ModuleNode module = tool.getSpecProcessor().getRootModule();
+            OpDefNode valueNode = module.getOpDef(replValueVarName);
+            
+			// Make output of TLC!Print and TLC!PrintT appear in the REPL. Set here
+			// and unset in finally below to suppress output of FastTool instantiation
+			// above.
+			tlc2.module.TLC.OUTPUT = replWriter;
+			final Value exprVal = (Value) tool.eval(valueNode.getBody());
+			return exprVal.toString();
+        } catch (EvalException e) {
+            throw new REPLException(explainEvalException(e), e);
+        } catch (Assert.TLCRuntimeException e) {
+            throw new REPLException(explainTLCRuntimeException(e), e);
+        } finally {
+            replWriter.flush();
+    		tlc2.module.TLC.OUTPUT = null;
         }
-        return "";
     }
 
     private void writeConfig(File configFile) throws IOException {
@@ -176,12 +148,44 @@ public class REPL {
         writer.close();
     }
 
+    private String explainEvalException(EvalException e) {
+        // TODO: Improve error messages with more specific detail.
+        return e.getMessage().replaceAll("\\n", " ").trim();
+    }
+
+    private String explainTLCRuntimeException(Assert.TLCRuntimeException e) {
+        String msg;
+        if (e.parameters != null && e.parameters.length > 0) {
+            // 0..1 \X 0..1 has non-null params of length zero. Actual error message is
+            // "Parsing or semantic analysis failed.".
+            msg = String.join("\n", e.parameters);
+        } else {
+            // Examples of what ends up here:
+            // 23 = TRUE
+            // Attempted to evaluate an expression of form P \/ Q when P was an integer.
+            // 23 \/ TRUE
+            // Attempted to check equality of integer 23 with non-integer: TRUE
+            // CHOOSE x \in Nat : x = 4
+            // Attempted to compute the value of an expression of form CHOOSE x \in S: P, but S was not enumerable.
+            msg = e.getMessage();
+            if (msg == null) {
+                msg = "Unknown TLCRuntimeException.";
+            }
+        }
+
+        // Strip meaningless location from error message.
+        msg = msg.replaceFirst("line [0-9]+, col [0-9]+ to line [0-9]+, col [0-9]+ of module tlarepl", "");
+        // Replace any newlines with whitespaces.
+        msg = msg.replaceAll("\\n", " ").trim();
+        return msg;
+    }
+
     /**
      * Runs the main REPL loop continuously until there is a fatal error or a user interrupt.
      */
     public void runREPL(final LineReader reader) throws IOException {
         // Run the loop.
-    	String expr;
+    	String expr = "";
         while (true) {
             try {
                 expr = reader.readLine(prompt);
@@ -190,6 +194,15 @@ public class REPL {
                     continue;
                 }
                 System.out.println(res);
+            } catch (REPLException e) {
+                String errorMessage = e.getMessage();
+                if (errorMessage != null) {
+                    System.out.printf("Error evaluating expression: '%s'%n%s%n", expr, errorMessage);
+                } else {
+                    System.out.printf("Error evaluating expression: '%s'%n", expr);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
             } catch (UserInterruptException e) {
                 return;
             } catch (EndOfFileException e) {
